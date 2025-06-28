@@ -22,8 +22,9 @@ from app.schemas.scanner import WebSocketMessage, StateUpdateMessage, LogMessage
 class ScannerManager(LoggerMixin):
     """Manages scanner operations and WebSocket connections."""
     
-    def __init__(self, db_session: AsyncSession):
+    def __init__(self, db_session: AsyncSession, user_id: str):
         self.db = db_session
+        self.user_id = user_id  
         self.position_calculator = PositionCalculator()
         self.connected_clients: Dict[str, WebSocket] = {}
         self.operation_task: Optional[asyncio.Task] = None
@@ -90,11 +91,12 @@ class ScannerManager(LoggerMixin):
         return total_pending < self._max_pending_movements
     
     async def _load_state_from_db(self) -> None:
-        """Load scanner state from database."""
+        """Load scanner state from database for specific user."""
         try:
-            # Get the latest state from database - fix SQL text
+            # Get the latest state from database for this user
             result = await self.db.execute(
-                text("SELECT * FROM scanner_state ORDER BY last_updated DESC LIMIT 1")
+                text("SELECT * FROM scanner_state WHERE user_id = :user_id"),
+                {"user_id": self.user_id}
             )
             state_row = result.fetchone()
             
@@ -123,32 +125,38 @@ class ScannerManager(LoggerMixin):
                     self.operation_start_time = None
                     self.current_movement_duration = None
                 
-                self.log_operation("Scanner state loaded from database", position=str(self.current_position))
+                self.log_operation("Scanner state loaded from database", position=str(self.current_position), user_id=self.user_id)
             else:
                 # Create initial state in database
                 await self._save_state_to_db()
-                self.log_operation("Initial scanner state created in database")
+                self.log_operation("Initial scanner state created in database", user_id=self.user_id)
                 
-            # Load captured positions - fix SQL text
+            # Load captured positions for this user
             result = await self.db.execute(
-                text("SELECT DISTINCT position_x, position_y FROM captured_positions")
+                text("SELECT DISTINCT position_x, position_y FROM captured_positions WHERE user_id = :user_id"),
+                {"user_id": self.user_id}
             )
             for row in result.fetchall():
                 self.captured_positions.add((row.position_x, row.position_y))
                 
         except Exception as e:
-            self.log_error("Failed to load state from database", error=e)
+            self.log_error("Failed to load state from database", error=e, user_id=self.user_id)
             # Use default state if database load fails
             self.current_position = self.position_calculator.get_default_position()
-            self.log_operation("Using default scanner state")
+            self.log_operation("Using default scanner state", user_id=self.user_id)
     
+
     async def _save_state_to_db(self) -> None:
-        """Save current scanner state to database."""
+        """Save current scanner state to database for specific user."""
         try:
-            # Delete existing state and insert new one (simple approach for single-instance) - fix SQL text
-            await self.db.execute(text("DELETE FROM scanner_state"))
+            # Delete existing state for this user and insert new one
+            await self.db.execute(
+                text("DELETE FROM scanner_state WHERE user_id = :user_id"),
+                {"user_id": self.user_id}
+            )
             
             state = ScannerState(
+                user_id=self.user_id,
                 current_position_x=self.current_position.x,
                 current_position_y=self.current_position.y,
                 horizontal_movement_pending=self.horizontal_movement_pending,
@@ -166,7 +174,7 @@ class ScannerManager(LoggerMixin):
             self._state_cache = None
             
         except Exception as e:
-            self.log_error("Failed to save state to database", error=e)
+            self.log_error("Failed to save state to database", error=e, user_id=self.user_id)
             await self.db.rollback()
     
     async def connect_client(self, client_id: str, websocket: WebSocket) -> None:
@@ -175,8 +183,8 @@ class ScannerManager(LoggerMixin):
             await websocket.accept()
             self.connected_clients[client_id] = websocket
             
-            # Create session in database
-            session = ScannerSession(id=client_id)
+            # Create session in database with user_id
+            session = ScannerSession(id=client_id, user_id=self.user_id)
             self.db.add(session)
             await self.db.commit()
             
@@ -184,29 +192,29 @@ class ScannerManager(LoggerMixin):
             await self.send_state_to_client(client_id)
             await self.broadcast_log(f"Client {client_id[:8]} connected")
             
-            self.log_operation("Client connected", client_id=client_id[:8])
+            self.log_operation("Client connected", client_id=client_id[:8], user_id=self.user_id)
             
         except Exception as e:
-            self.log_error("Failed to connect client", error=e, client_id=client_id[:8])
-    
+            self.log_error("Failed to connect client", error=e, client_id=client_id[:8], user_id=self.user_id)
+
     async def disconnect_client(self, client_id: str) -> None:
         """Disconnect a WebSocket client."""
         try:
             if client_id in self.connected_clients:
                 del self.connected_clients[client_id]
                 
-                # Update session in database - fix SQL text
+                # Update session in database
                 await self.db.execute(
-                    text("UPDATE scanner_sessions SET is_active = false, last_activity = :last_activity WHERE id = :id"),
-                    {"last_activity": datetime.utcnow(), "id": client_id}
+                    text("UPDATE scanner_sessions SET is_active = false, last_activity = :last_activity WHERE id = :id AND user_id = :user_id"),
+                    {"last_activity": datetime.utcnow(), "id": client_id, "user_id": self.user_id}
                 )
                 await self.db.commit()
                 
                 await self.broadcast_log(f"Client {client_id[:8]} disconnected")
-                self.log_operation("Client disconnected", client_id=client_id[:8])
+                self.log_operation("Client disconnected", client_id=client_id[:8], user_id=self.user_id)
                 
         except Exception as e:
-            self.log_error("Failed to disconnect client", error=e, client_id=client_id[:8])
+            self.log_error("Failed to disconnect client", error=e, client_id=client_id[:8], user_id=self.user_id)
     
     async def queue_movement(self, direction: Direction, session_id: str) -> None:
         """Queue a movement command with validation."""
@@ -450,9 +458,10 @@ class ScannerManager(LoggerMixin):
             self.captured_positions.add(position_tuple)
             self.operation_status = OperationStatus.COMPLETED
             
-            # Save captured position to database
+            # Save captured position to database with user_id
             captured_pos = CapturedPosition(
                 session_id=session_id,
+                user_id=self.user_id,  # Added
                 position_x=self.current_position.x,
                 position_y=self.current_position.y
             )
@@ -479,10 +488,10 @@ class ScannerManager(LoggerMixin):
             await self._save_state_to_db()
             await self.broadcast_state()
             
-            self.log_operation("Image captured", position=str(self.current_position))
+            self.log_operation("Image captured", position=str(self.current_position), user_id=self.user_id)
             
         except Exception as e:
-            self.log_error("Failed to focus and capture", error=e)
+            self.log_error("Failed to focus and capture", error=e, user_id=self.user_id)
             # Reset to ready state on error
             self.operation_status = OperationStatus.READY
             self.operation_start_time = None
@@ -498,10 +507,11 @@ class ScannerManager(LoggerMixin):
         duration: Optional[float] = None,
         details: Optional[str] = None
     ) -> None:
-        """Log operation to database."""
+        """Log operation to database with user_id."""
         try:
             operation = ScannerOperation(
                 session_id=session_id,
+                user_id=self.user_id,  # Added
                 operation_type=operation_type,
                 position_x=position_x,
                 position_y=position_y,
@@ -511,9 +521,9 @@ class ScannerManager(LoggerMixin):
             self.db.add(operation)
             await self.db.commit()
         except Exception as e:
-            self.log_error("Failed to log operation to database", error=e)
+            self.log_error("Failed to log operation to database", error=e, user_id=self.user_id)
             await self.db.rollback()
-    
+
     def get_state_dict(self) -> Dict:
         """Get current state as dictionary."""
         if self._state_cache is None:
@@ -581,7 +591,7 @@ class ScannerManager(LoggerMixin):
             await self.disconnect_client(client_id)
     
     async def reset_scanner(self) -> None:
-        """Reset scanner to initial state."""
+        """Reset scanner to initial state for specific user."""
         try:
             # Cancel any ongoing operations
             if self.operation_task and not self.operation_task.done():
@@ -597,16 +607,22 @@ class ScannerManager(LoggerMixin):
             self.current_movement_duration = None
             self.is_processing = False
             
-            # Clear all captured positions from database - fix SQL text
-            await self.db.execute(text("DELETE FROM captured_positions"))
-            await self.db.execute(text("DELETE FROM scanner_operations"))
+            # Clear all captured positions and operations from database for this user
+            await self.db.execute(
+                text("DELETE FROM captured_positions WHERE user_id = :user_id"),
+                {"user_id": self.user_id}
+            )
+            await self.db.execute(
+                text("DELETE FROM scanner_operations WHERE user_id = :user_id"),
+                {"user_id": self.user_id}
+            )
             await self._save_state_to_db()
             
             await self.broadcast_log("Scanner reset to initial state")
             await self.broadcast_state()
             
-            self.log_operation("Scanner reset completed")
+            self.log_operation("Scanner reset completed", user_id=self.user_id)
             
         except Exception as e:
-            self.log_error("Failed to reset scanner", error=e)
+            self.log_error("Failed to reset scanner", error=e, user_id=self.user_id)
             raise

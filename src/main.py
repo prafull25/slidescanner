@@ -12,7 +12,7 @@ from app.common.config import settings
 from app.common.logging import setup_logging, get_logger
 from app.common.database import create_tables, close_db
 from app.routes.scanner import router as scanner_router
-from app.routes.websocket import websocket_endpoint
+from app.routes.websocket import ws_router
 
 
 @asynccontextmanager
@@ -72,10 +72,8 @@ def create_app() -> FastAPI:
     
     # Include REST API routes
     app.include_router(scanner_router)
-    
-    # Add WebSocket endpoint
-    app.add_websocket_route("/ws", websocket_endpoint)
-    
+    app.include_router(ws_router)
+        
     logger.info("FastAPI application created and configured")
     return app
 

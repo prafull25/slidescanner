@@ -1,5 +1,5 @@
 """
-Database models for scanner operations.
+Database models for scanner operations - Updated for multi-user support.
 """
 
 from typing import Optional
@@ -16,6 +16,7 @@ class ScannerSession(Base):
     __tablename__ = "scanner_sessions"
     
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(10), nullable=False)  # Added
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     last_activity: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -30,7 +31,7 @@ class ScannerState(Base):
     
     __tablename__ = "scanner_state"
     
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(10), primary_key=True)  # Changed to primary key
     current_position_x: Mapped[int] = mapped_column(Integer, default=5)
     current_position_y: Mapped[int] = mapped_column(Integer, default=5)
     horizontal_movement_pending: Mapped[int] = mapped_column(Integer, default=0)
@@ -48,6 +49,7 @@ class ScannerOperation(Base):
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(String(50), ForeignKey("scanner_sessions.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(10), nullable=False)  # Added
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     operation_type: Mapped[str] = mapped_column(String(20))  # move, focus, capture
     position_x: Mapped[int] = mapped_column(Integer)
@@ -66,6 +68,7 @@ class CapturedPosition(Base):
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(String(50), ForeignKey("scanner_sessions.id"), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(10), nullable=False)  # Added
     position_x: Mapped[int] = mapped_column(Integer)
     position_y: Mapped[int] = mapped_column(Integer)
     captured_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

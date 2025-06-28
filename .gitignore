@@ -3,4 +3,4 @@ __pycache__/
 .env
 .vscode/
 *.log
-*.sqlite3
+*.db

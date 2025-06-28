@@ -1,12 +1,12 @@
 """
-WebSocket API handlers for real-time scanner communication.
+WebSocket API handlers for real-time scanner communication - Updated for multi-user support.
 """
 
 import json
 import time
 import uuid
 from typing import Dict, Any
-from fastapi import WebSocket, WebSocketDisconnect, Depends
+from fastapi import WebSocket, WebSocketDisconnect, Depends, HTTPException,APIRouter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.common.database import async_session_factory, get_db
@@ -17,29 +17,45 @@ from app.schemas.scanner import ErrorMessage, PongMessage
 
 logger = get_logger(__name__)
 
-# Global registry of scanner managers per database session
+# Global registry of scanner managers per user
 _scanner_managers: Dict[str, ScannerManager] = {}
 
+ws_router = APIRouter()
 
-async def get_scanner_manager(db: AsyncSession = Depends(get_db)) -> Any:
+def _validate_user_id(user_id: str) -> bool:
+    """Validate user_id format (4-6 characters, alphanumeric)."""
+    if not user_id or not isinstance(user_id, str):
+        return False
+    if len(user_id) < 4 or len(user_id) > 6:
+        return False
+    return user_id.isalnum()
+
+
+async def get_scanner_manager(user_id: str, db: AsyncSession = Depends(get_db)) -> Any:
     """
-    Get or create scanner manager for the database session.
+    Get or create scanner manager for the user.
     
     Note: Return type is Any to avoid FastAPI Pydantic validation issues.
     """
-    session_id = str(id(db))
+    if not _validate_user_id(user_id):
+        raise HTTPException(status_code=400, detail="Invalid user_id format")
     
-    if session_id not in _scanner_managers:
-        manager = ScannerManager(db)
+    manager_key = f"{user_id}_{str(id(db))}"
+    
+    if manager_key not in _scanner_managers:
+        manager = ScannerManager(db, user_id)
         await manager.initialize()
-        _scanner_managers[session_id] = manager
+        _scanner_managers[manager_key] = manager
     
-    return _scanner_managers[session_id]
+    return _scanner_managers[manager_key]
 
-
-async def websocket_endpoint(websocket: WebSocket):
+@ws_router.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
     """
     WebSocket endpoint for real-time scanner communication.
+    
+    Args:
+        user_id: User identifier (4-6 characters, alphanumeric)
     
     Handles:
     - Client connection/disconnection
@@ -47,16 +63,20 @@ async def websocket_endpoint(websocket: WebSocket):
     - State requests
     - Ping/pong for connection health
     """
+    if not _validate_user_id(user_id):
+        await websocket.close(code=4000, reason="Invalid user_id format")
+        return
+    
     client_id = str(uuid.uuid4())
     
     # Create database session manually for WebSocket
     async with async_session_factory() as db:
         try:
             # Get scanner manager directly without dependency injection
-            scanner_manager = await _get_scanner_manager_internal(db)
+            scanner_manager = await _get_scanner_manager_internal(db, user_id)
             
             await scanner_manager.connect_client(client_id, websocket)
-            logger.info("WebSocket client connected", client_id=client_id[:8])
+            logger.info("WebSocket client connected", client_id=client_id[:8], user_id=user_id)
             
             while True:
                 try:
@@ -83,31 +103,31 @@ async def websocket_endpoint(websocket: WebSocket):
                 except json.JSONDecodeError:
                     await _send_error_message(websocket, "Invalid JSON format")
                 except Exception as e:
-                    logger.error("WebSocket message handling error", error=str(e), client_id=client_id[:8])
+                    logger.error("WebSocket message handling error", error=str(e), client_id=client_id[:8], user_id=user_id)
                     await _send_error_message(websocket, str(e))
                     
         except WebSocketDisconnect:
             pass
         except Exception as e:
-            logger.error("WebSocket connection error", error=str(e), client_id=client_id[:8])
+            logger.error("WebSocket connection error", error=str(e), client_id=client_id[:8], user_id=user_id)
         finally:
             try:
                 await scanner_manager.disconnect_client(client_id)
-                logger.info("WebSocket client disconnected", client_id=client_id[:8])
+                logger.info("WebSocket client disconnected", client_id=client_id[:8], user_id=user_id)
             except:
                 pass
 
 
-async def _get_scanner_manager_internal(db: AsyncSession) -> ScannerManager:
+async def _get_scanner_manager_internal(db: AsyncSession, user_id: str) -> ScannerManager:
     """Internal helper to get scanner manager without FastAPI dependency injection."""
-    session_id = str(id(db))
+    manager_key = f"{user_id}_{str(id(db))}"
     
-    if session_id not in _scanner_managers:
-        manager = ScannerManager(db)
+    if manager_key not in _scanner_managers:
+        manager = ScannerManager(db, user_id)
         await manager.initialize()
-        _scanner_managers[session_id] = manager
+        _scanner_managers[manager_key] = manager
     
-    return _scanner_managers[session_id]
+    return _scanner_managers[manager_key]
 
 
 async def _handle_move_message(scanner_manager: ScannerManager, message: dict, client_id: str):
@@ -117,7 +137,7 @@ async def _handle_move_message(scanner_manager: ScannerManager, message: dict, c
         direction = Direction(direction_str)
         await scanner_manager.queue_movement(direction, client_id)
     except ValueError:
-        logger.warning("Invalid direction received", direction=direction_str, client_id=client_id[:8])
+        logger.warning("Invalid direction received", direction=direction_str, client_id=client_id[:8], user_id=scanner_manager.user_id)
         raise ValueError("Invalid direction")
 
 
