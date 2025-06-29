@@ -414,11 +414,19 @@ class ScannerManager(LoggerMixin):
                     await self.broadcast_log("Processing timeout reached, stopping operations")
                     break
                 
-                # Calculate target position
+                # SNAPSHOT the current pending movements and clear them
+                # This prevents new movements from affecting the current processing cycle
+                async with self._state_lock:
+                    current_h_pending = self.horizontal_movement_pending
+                    current_v_pending = self.vertical_movement_pending
+                    self.horizontal_movement_pending = 0
+                    self.vertical_movement_pending = 0
+                
+                # Calculate target position using the snapshotted values
                 target_position = self.position_calculator.calculate_target_position(
                     self.current_position,
-                    self.horizontal_movement_pending,
-                    self.vertical_movement_pending
+                    current_h_pending,
+                    current_v_pending
                 )
                 
                 movement_duration = self.position_calculator.calculate_movement_time(
@@ -427,12 +435,8 @@ class ScannerManager(LoggerMixin):
                 
                 # Validate movement duration
                 if movement_duration <= 0 or movement_duration > 60:  # Max 60 seconds per movement
-                    await self.broadcast_log(f"Invalid movement duration: {movement_duration}s, clearing pending movements")
-                    async with self._state_lock:
-                        self.horizontal_movement_pending = 0
-                        self.vertical_movement_pending = 0
-                        await self._save_state_to_db()
-                    break
+                    await self.broadcast_log(f"Invalid movement duration: {movement_duration}s, skipping this cycle")
+                    continue
                 
                 # Start moving operation
                 async with self._state_lock:
@@ -445,87 +449,25 @@ class ScannerManager(LoggerMixin):
                 
                 await self.broadcast_log(
                     f"Starting movement to {target_position} - "
+                    f"H:{current_h_pending}, V:{current_v_pending}, "
                     f"Distance: {self.current_position.distance_to(target_position):.2f}, "
                     f"Duration: {movement_duration:.2f}s"
                 )
-                # await self.broadcast_state()
                 
-                # Movement with dynamic duration - check every 0.1s for new commands
-                elapsed = 0.0
-                check_interval = 0.1
+                # Execute the full movement without interruption
+                await asyncio.sleep(movement_duration)
                 
+                # Update position to target
                 async with self._state_lock:
-                    last_pending_h = self.horizontal_movement_pending
-                    last_pending_v = self.vertical_movement_pending
-                    self.horizontal_movement_pending = 0
-                    self.vertical_movement_pending = 0
-                
-                last_pending_distance = abs(last_pending_h) + abs(last_pending_v)
-                per_slide_time = movement_duration/last_pending_distance if last_pending_distance > 0 else movement_duration
-
-                flag_break = False
-                while elapsed < movement_duration:
-                    await asyncio.sleep(check_interval)
-                    elapsed += check_interval
-                    blocks_movable = int(elapsed / per_slide_time) if per_slide_time > 0 else 0
-
-                    # Check if new movements were queued during this time
-                    async with self._state_lock:
-                        has_new_movements = (self.horizontal_movement_pending != 0 or 
-                                           self.vertical_movement_pending != 0)
-                    
-                    if has_new_movements:
-                        if blocks_movable >= 1:
-                            if last_pending_h != 0 and blocks_movable >= 1:
-                                # Determine horizontal movement direction and amount
-                                h_direction = 1 if last_pending_h > 0 else -1
-                                h_moves = min(abs(last_pending_h), blocks_movable)
-                                
-                                # Update current position for horizontal movement
-                                async with self._state_lock:
-                                    new_x = self.current_position.x + (h_moves * h_direction)
-                                    self.current_position = Position(new_x, self.current_position.y).clamp_to_bounds()
-                                
-                                # Update pending horizontal movement
-                                last_pending_h -= (h_moves * h_direction)
-                                blocks_movable -= h_moves
-                                
-                                await self.broadcast_log(f"Moved {h_moves} blocks horizontally, position: {self.current_position}")
-                            
-                            if last_pending_v != 0 and blocks_movable >= 1:
-                                # Determine vertical movement direction and amount
-                                v_direction = 1 if last_pending_v > 0 else -1
-                                v_moves = min(abs(last_pending_v), blocks_movable)
-                                
-                                # Update current position for vertical movement
-                                async with self._state_lock:
-                                    new_y = self.current_position.y + (v_moves * v_direction)
-                                    self.current_position = Position(self.current_position.x, new_y).clamp_to_bounds()
-                                
-                                # Update pending temp vertical movement
-                                last_pending_v -= (v_moves * v_direction)
-                                
-                                await self.broadcast_log(f"Moved {v_moves} blocks vertically, position: {self.current_position}")
-                        flag_break = True           
-                        break
-                
-                if not flag_break:
-                    async with self._state_lock:
-                        self.current_position = target_position.clamp_to_bounds()
-                    last_pending_h = 0
-                    last_pending_v = 0
-                
-                async with self._state_lock:
-                    self.horizontal_movement_pending += last_pending_h
-                    self.vertical_movement_pending += last_pending_v
+                    self.current_position = target_position.clamp_to_bounds()
                     self.current_movement_duration = None
                 
                 # Save state and log completion
-                await self._safe_db_operation(self._log_movement_complete, session_id, elapsed)
+                await self._safe_db_operation(self._log_movement_complete, session_id, movement_duration)
                 
                 await self.broadcast_log(f"Movement completed to {self.current_position}")
                 
-                # Small delay to check for new movements
+                # Small delay before checking for more pending movements
                 await asyncio.sleep(0.1)
             
             # Check for infinite loop condition

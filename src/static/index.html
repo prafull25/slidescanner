@@ -165,6 +165,11 @@
             box-shadow: 0 2px 10px rgba(0,0,0,0.2);
         }
 
+        .control-btn.pressed {
+            background: linear-gradient(145deg, #4CAF50, #45a049);
+            transform: scale(0.95);
+        }
+
         .control-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
@@ -247,6 +252,15 @@
             box-sizing: border-box;
         }
 
+        .debug-info {
+            background: rgba(0,0,0,0.5);
+            padding: 10px;
+            border-radius: 10px;
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+
         @media (max-width: 768px) {
             .container {
                 grid-template-columns: 1fr;
@@ -279,13 +293,13 @@
             <div class="controls">
                 <div class="arrow-controls">
                     <div></div>
-                    <button class="control-btn" id="upBtn" onclick="sendMove('up')">↑</button>
+                    <button class="control-btn" id="upBtn" data-direction="up">↑</button>
                     <div></div>
-                    <button class="control-btn" id="leftBtn" onclick="sendMove('left')">←</button>
+                    <button class="control-btn" id="leftBtn" data-direction="left">←</button>
                     <div></div>
-                    <button class="control-btn" id="rightBtn" onclick="sendMove('right')">→</button>
+                    <button class="control-btn" id="rightBtn" data-direction="right">→</button>
                     <div></div>
-                    <button class="control-btn" id="downBtn" onclick="sendMove('down')">↓</button>
+                    <button class="control-btn" id="downBtn" data-direction="down">↓</button>
                     <div></div>
                 </div>
             </div>
@@ -319,6 +333,12 @@
                     <span class="status-value" id="capturedCount">0</span>
                 </div>
             </div>
+
+            <div class="debug-info" id="debugInfo">
+                <div>Keys Pressed: <span id="pressedKeys">none</span></div>
+                <div>Repeat Timers: <span id="activeTimers">0</span></div>
+                <div>Commands Sent: <span id="commandsSent">0</span></div>
+            </div>
             
             <button class="reset-btn" onclick="resetScanner()" id="resetBtn">🔄 Reset Scanner</button>
         </div>
@@ -338,6 +358,12 @@
         let currentState = null;
         let userId = null;
         let isValidUser = false;
+
+        // Long press handling
+        let pressedKeys = new Set();
+        let repeatTimers = new Map();
+        let commandCount = 0;
+        const REPEAT_DELAY = 150; // milliseconds between repeated commands
 
         // Extract user_id from URL parameters
         function getUserIdFromURL() {
@@ -366,6 +392,14 @@
                 userInfoElement.textContent = `❌ Invalid User ID: ${userId || 'Not provided'}`;
                 userInfoElement.className = 'user-info user-invalid';
             }
+        }
+
+        // Update debug info
+        function updateDebugInfo() {
+            document.getElementById('pressedKeys').textContent = 
+                pressedKeys.size > 0 ? Array.from(pressedKeys).join(', ') : 'none';
+            document.getElementById('activeTimers').textContent = repeatTimers.size;
+            document.getElementById('commandsSent').textContent = commandCount;
         }
 
         // Show/hide disabled overlay
@@ -551,7 +585,73 @@
                 direction: direction
             }));
             
-            console.log(`Movement queued: ${direction}`);
+            commandCount++;
+            updateDebugInfo();
+            console.log(`Movement queued: ${direction} (total: ${commandCount})`);
+        }
+
+        // Start repeating movement
+        function startRepeatingMovement(direction) {
+            if (repeatTimers.has(direction)) {
+                return; // Already repeating this direction
+            }
+
+            const timer = setInterval(() => {
+                sendMove(direction);
+            }, REPEAT_DELAY);
+
+            repeatTimers.set(direction, timer);
+            updateDebugInfo();
+        }
+
+        // Stop repeating movement
+        function stopRepeatingMovement(direction) {
+            if (repeatTimers.has(direction)) {
+                clearInterval(repeatTimers.get(direction));
+                repeatTimers.delete(direction);
+                updateDebugInfo();
+            }
+        }
+
+        // Handle key press
+        function handleKeyDown(key, direction) {
+            if (!isValidUser || pressedKeys.has(key)) {
+                return;
+            }
+
+            pressedKeys.add(key);
+            
+            // Send immediate movement
+            sendMove(direction);
+            
+            // Update button visual state
+            const btn = document.querySelector(`[data-direction="${direction}"]`);
+            if (btn) btn.classList.add('pressed');
+
+            // Start repeating after a short delay
+            setTimeout(() => {
+                if (pressedKeys.has(key)) {
+                    startRepeatingMovement(direction);
+                }
+            }, 300);
+
+            updateDebugInfo();
+        }
+
+        // Handle key release
+        function handleKeyUp(key, direction) {
+            if (!pressedKeys.has(key)) {
+                return;
+            }
+
+            pressedKeys.delete(key);
+            stopRepeatingMovement(direction);
+            
+            // Update button visual state
+            const btn = document.querySelector(`[data-direction="${direction}"]`);
+            if (btn) btn.classList.remove('pressed');
+
+            updateDebugInfo();
         }
 
         // Reset scanner
@@ -561,11 +661,15 @@
             }
             
             try {
-                const response = await fetch(`https://slidescanner.onrender.com/api/v1/users/${userId}/reset`, {
+                const response = await fetch(`http://slidescanner.onrender.com/api/v1/users/${userId}/reset`, {
                     method: 'POST'
                 });
                 const result = await response.json();
                 console.log('Scanner reset: ' + result.message);
+                
+                // Reset command counter
+                commandCount = 0;
+                updateDebugInfo();
             } catch (error) {
                 console.log('Reset failed: ' + error.message);
             }
@@ -581,26 +685,26 @@
             lastTouchEnd = now;
         }, false);
 
-        // Keyboard controls
+        // Keyboard controls with long press support
         document.addEventListener('keydown', function(event) {
             if (!isValidUser) return;
             
             switch(event.key) {
                 case 'ArrowUp':
                     event.preventDefault();
-                    sendMove('up');
+                    handleKeyDown('ArrowUp', 'up');
                     break;
                 case 'ArrowDown':
                     event.preventDefault();
-                    sendMove('down');
+                    handleKeyDown('ArrowDown', 'down');
                     break;
                 case 'ArrowLeft':
                     event.preventDefault();
-                    sendMove('left');
+                    handleKeyDown('ArrowLeft', 'left');
                     break;
                 case 'ArrowRight':
                     event.preventDefault();
-                    sendMove('right');
+                    handleKeyDown('ArrowRight', 'right');
                     break;
                 case 'r':
                 case 'R':
@@ -608,6 +712,69 @@
                     resetScanner();
                     break;
             }
+        });
+
+        document.addEventListener('keyup', function(event) {
+            if (!isValidUser) return;
+            
+            switch(event.key) {
+                case 'ArrowUp':
+                    event.preventDefault();
+                    handleKeyUp('ArrowUp', 'up');
+                    break;
+                case 'ArrowDown':
+                    event.preventDefault();
+                    handleKeyUp('ArrowDown', 'down');
+                    break;
+                case 'ArrowLeft':
+                    event.preventDefault();
+                    handleKeyUp('ArrowLeft', 'left');
+                    break;
+                case 'ArrowRight':
+                    event.preventDefault();
+                    handleKeyUp('ArrowRight', 'right');
+                    break;
+            }
+        });
+
+        // Mouse/touch controls for buttons
+        document.addEventListener('DOMContentLoaded', function() {
+            const buttons = document.querySelectorAll('.control-btn[data-direction]');
+            
+            buttons.forEach(btn => {
+                const direction = btn.dataset.direction;
+                
+                // Mouse events
+                btn.addEventListener('mousedown', (e) => {
+                    e.preventDefault();
+                    handleKeyDown(`mouse_${direction}`, direction);
+                });
+                
+                btn.addEventListener('mouseup', (e) => {
+                    e.preventDefault();
+                    handleKeyUp(`mouse_${direction}`, direction);
+                });
+                
+                btn.addEventListener('mouseleave', (e) => {
+                    handleKeyUp(`mouse_${direction}`, direction);
+                });
+                
+                // Touch events
+                btn.addEventListener('touchstart', (e) => {
+                    e.preventDefault();
+                    handleKeyDown(`touch_${direction}`, direction);
+                });
+                
+                btn.addEventListener('touchend', (e) => {
+                    e.preventDefault();
+                    handleKeyUp(`touch_${direction}`, direction);
+                });
+                
+                btn.addEventListener('touchcancel', (e) => {
+                    e.preventDefault();
+                    handleKeyUp(`touch_${direction}`, direction);
+                });
+            });
         });
 
         // Initialize everything
@@ -619,6 +786,7 @@
             // Update UI based on user ID validity
             updateUserInfo();
             updateConnectionStatus();
+            updateDebugInfo();
             
             if (!isValidUser) {
                 toggleDisabledOverlay(true);
@@ -636,6 +804,16 @@
                 }
             }, 30000);
         };
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', function() {
+            // Stop all timers
+            repeatTimers.forEach((timer, direction) => {
+                clearInterval(timer);
+            });
+            repeatTimers.clear();
+            pressedKeys.clear();
+        });
     </script>
 </body>
 </html>
