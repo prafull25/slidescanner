@@ -33,7 +33,7 @@ class Position:
     
     def distance_to(self, other: 'Position') -> float:
         """Calculate Euclidean distance to another position."""
-        return math.sqrt((self.x - other.x)**2 + (self.y - other.y)**2)
+        return abs(self.x - other.x) + abs(self.y - other.y)
     
     def to_dict(self) -> dict:
         """Convert position to dictionary."""
