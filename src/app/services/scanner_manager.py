@@ -601,7 +601,7 @@ class ScannerManager(LoggerMixin):
             await self.broadcast_log(
                 f"Starting focus and capture at {self.current_position} - Duration: {settings.focus_duration}s"
             )
-            await self.broadcast_state()
+            await self.broadcast_state(True)
             
             # Validate focus duration
             focus_duration = max(0.1, min(settings.focus_duration, 30.0))  # Between 0.1 and 30 seconds
@@ -620,7 +620,7 @@ class ScannerManager(LoggerMixin):
             await self._safe_db_operation(self._log_capture_complete, session_id, focus_duration)
             
             await self.broadcast_log(f"Image captured at {self.current_position}")
-            await self.broadcast_state()
+            await self.broadcast_state(True)
             
             # Reset to ready after a short delay
             await asyncio.sleep(0.5)
@@ -706,11 +706,12 @@ class ScannerManager(LoggerMixin):
                 await self.disconnect_client(client_id)
     
     
-    async def broadcast_state(self) -> None:
+    async def broadcast_state(self,force: bool = False) -> None:
         """Broadcast current state to all connected clients."""
         if not self.connected_clients:
             return
-        
+        if not force and self.is_processing:
+            return
         # Clear cache to force refresh
         self._state_cache = None
         message = StateUpdateMessage(data=self.get_state_dict())
