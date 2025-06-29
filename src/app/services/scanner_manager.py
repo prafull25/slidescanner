@@ -146,14 +146,12 @@ class ScannerManager(LoggerMixin):
                 temp_vertical
             )
             
-            # Check if target position is within bounds using the position calculator's method
-            if hasattr(self.position_calculator, 'is_position_valid'):
-                return self.position_calculator.is_position_valid(target_position)
-            else:
-                return True
+            # Check if target position is within bounds
+            return self.position_calculator.is_valid_position(target_position)
+            
         except Exception as e:
             self.log_error("Error validating movement", error=e, direction=direction.value)
-            return True
+            return False
     
     def _is_pending_movements_within_limit(self) -> bool:
         """Check if pending movements are within reasonable limits."""
@@ -172,23 +170,40 @@ class ScannerManager(LoggerMixin):
                 state_row = result.fetchone()
                 
                 if state_row:
-                    self.current_position = Position(state_row.current_position_x, state_row.current_position_y)
-                    self.horizontal_movement_pending = state_row.horizontal_movement_pending
-                    self.vertical_movement_pending = state_row.vertical_movement_pending
-                    self.operation_status = OperationStatus(state_row.operation_status)
-                    self.operation_start_time = state_row.operation_start_time.timestamp() if state_row.operation_start_time else None
-                    self.current_movement_duration = state_row.current_movement_duration
+                    # Load position and validate it
+                    loaded_position = Position(state_row.current_position_x, state_row.current_position_y)
                     
-                    # Validate loaded state and reset if invalid
-                    if hasattr(self.position_calculator, 'is_position_valid'):
-                        if not self.position_calculator.is_position_valid(self.current_position):
-                            self.log_error("Invalid position loaded from database, resetting to default")
-                            self.current_position = self.position_calculator.get_default_position()
+                    # Validate loaded position and reset if invalid
+                    if not self.position_calculator.is_valid_position(loaded_position):
+                        self.log_error("Invalid position loaded from database, resetting to default", 
+                                     loaded_position=str(loaded_position))
+                        self.current_position =  loaded_position.clamp_to_bounds()
+                        self.horizontal_movement_pending = 0
+                        self.vertical_movement_pending = 0
+                        self.operation_status = OperationStatus.READY
+                        self.operation_start_time = None
+                        self.current_movement_duration = None
+                    else:
+                        self.current_position = loaded_position
+                        self.horizontal_movement_pending = state_row.horizontal_movement_pending
+                        self.vertical_movement_pending = state_row.vertical_movement_pending
+                        self.operation_status = OperationStatus(state_row.operation_status)
+                        self.operation_start_time = state_row.operation_start_time.timestamp() if state_row.operation_start_time else None
+                        self.current_movement_duration = state_row.current_movement_duration
+                        
+                        # Validate that pending movements don't take us out of bounds
+                        target_position = self.position_calculator.calculate_target_position(
+                            self.current_position,
+                            self.horizontal_movement_pending,
+                            self.vertical_movement_pending
+                        )
+                        
+                        if not self.position_calculator.is_valid_position(target_position):
+                            self.log_error("Pending movements would go out of bounds, clearing them",
+                                         current_position=str(self.current_position),
+                                         target_position=str(target_position))
                             self.horizontal_movement_pending = 0
                             self.vertical_movement_pending = 0
-                            self.operation_status = OperationStatus.READY
-                            self.operation_start_time = None
-                            self.current_movement_duration = None
                     
                     # Reset processing state if it was left in processing
                     if self.operation_status in [OperationStatus.MOVING, OperationStatus.FOCUSING]:
@@ -223,7 +238,7 @@ class ScannerManager(LoggerMixin):
             text("DELETE FROM scanner_state WHERE user_id = :user_id"),
             {"user_id": self.user_id}
         )
-        
+        self.current_position.clamp_to_bounds()
         state = ScannerState(
             user_id=self.user_id,
             current_position_x=self.current_position.x,
@@ -304,6 +319,15 @@ class ScannerManager(LoggerMixin):
         """Queue a movement command with validation."""
         async with self._state_lock:  # Prevent concurrent state modifications
             try:
+                # Validate movement is within bounds BEFORE queuing
+                if not self._is_valid_movement(direction):
+                    error_msg = f"Movement {direction.value} would go out of bounds. Current position: {self.current_position}, Pending: H:{self.horizontal_movement_pending}, V:{self.vertical_movement_pending}"
+                    await self.broadcast_log(error_msg)
+                    self.log_operation("Movement rejected - would go out of bounds", 
+                                     direction=direction.value,
+                                     current_position=str(self.current_position))
+                    return
+                
                 if not self._is_pending_movements_within_limit():
                     error_msg = f"Too many pending movements. Current: H:{self.horizontal_movement_pending}, V:{self.vertical_movement_pending}"
                     await self.broadcast_log(error_msg)
@@ -312,13 +336,13 @@ class ScannerManager(LoggerMixin):
                 
                 # Update pending movements based on direction
                 if direction == Direction.LEFT:
-                    self.horizontal_movement_pending -= 1
+                    self.horizontal_movement_pending = min(0,self.horizontal_movement_pending-1)
                 elif direction == Direction.RIGHT:
-                    self.horizontal_movement_pending += 1
+                    self.horizontal_movement_pending = max(settings.grid_size,self.horizontal_movement_pending +1)
                 elif direction == Direction.UP:
-                    self.vertical_movement_pending += 1
+                    self.vertical_movement_pending = max(settings.grid_size,self.vertical_movement_pending +1)
                 elif direction == Direction.DOWN:
-                    self.vertical_movement_pending -= 1
+                    self.vertical_movement_pending =min(0,self.vertical_movement_pending-1)
                 
                 # Log operation to database and save state
                 await self._safe_db_operation(self._log_and_save_movement, direction, session_id)
@@ -348,6 +372,7 @@ class ScannerManager(LoggerMixin):
         """Log operation and save state in a single transaction."""
         async with self._db_transaction():
             # Log operation
+            self.current_position.clamp_to_bounds()
             operation = ScannerOperation(
                 session_id=session_id,
                 user_id=self.user_id,
@@ -423,7 +448,7 @@ class ScannerManager(LoggerMixin):
                     f"Distance: {self.current_position.distance_to(target_position):.2f}, "
                     f"Duration: {movement_duration:.2f}s"
                 )
-                await self.broadcast_state()
+                # await self.broadcast_state()
                 
                 # Movement with dynamic duration - check every 0.1s for new commands
                 elapsed = 0.0
@@ -459,7 +484,7 @@ class ScannerManager(LoggerMixin):
                                 # Update current position for horizontal movement
                                 async with self._state_lock:
                                     new_x = self.current_position.x + (h_moves * h_direction)
-                                    self.current_position = Position(new_x, self.current_position.y)
+                                    self.current_position = Position(new_x, self.current_position.y).clamp_to_bounds()
                                 
                                 # Update pending horizontal movement
                                 last_pending_h -= (h_moves * h_direction)
@@ -475,7 +500,7 @@ class ScannerManager(LoggerMixin):
                                 # Update current position for vertical movement
                                 async with self._state_lock:
                                     new_y = self.current_position.y + (v_moves * v_direction)
-                                    self.current_position = Position(self.current_position.x, new_y)
+                                    self.current_position = Position(self.current_position.x, new_y).clamp_to_bounds()
                                 
                                 # Update pending temp vertical movement
                                 last_pending_v -= (v_moves * v_direction)
@@ -486,7 +511,7 @@ class ScannerManager(LoggerMixin):
                 
                 if not flag_break:
                     async with self._state_lock:
-                        self.current_position = target_position
+                        self.current_position = target_position.clamp_to_bounds()
                     last_pending_h = 0
                     last_pending_v = 0
                 
@@ -499,8 +524,6 @@ class ScannerManager(LoggerMixin):
                 await self._safe_db_operation(self._log_movement_complete, session_id, elapsed)
                 
                 await self.broadcast_log(f"Movement completed to {self.current_position}")
-                if not flag_break:
-                    await self.broadcast_state()
                 
                 # Small delay to check for new movements
                 await asyncio.sleep(0.1)
@@ -532,7 +555,6 @@ class ScannerManager(LoggerMixin):
                     self.operation_status != OperationStatus.READY):
                     self.operation_status = OperationStatus.READY
                     await self._save_state_to_db()
-                    await self.broadcast_state()
     
     async def _log_movement_start(self, session_id: str, target_position: Position, movement_duration: float):
         """Log movement start and save state."""
@@ -589,6 +611,7 @@ class ScannerManager(LoggerMixin):
             
             # Capture image
             async with self._state_lock:
+                self.current_position.clamp_to_bounds()
                 position_tuple = self.current_position.to_tuple()
                 self.captured_positions.add(position_tuple)
                 self.operation_status = OperationStatus.COMPLETED
@@ -622,6 +645,7 @@ class ScannerManager(LoggerMixin):
         """Log capture completion and save to database."""
         async with self._db_transaction():
             # Log focus start
+            self.current_position.clamp_to_bounds()
             focus_start_op = ScannerOperation(
                 session_id=session_id,
                 user_id=self.user_id,
@@ -658,6 +682,7 @@ class ScannerManager(LoggerMixin):
     def get_state_dict(self) -> Dict:
         """Get current state as dictionary."""
         if self._state_cache is None:
+            self.current_position.clamp_to_bounds()
             self._state_cache = {
                 "current_position": self.current_position.to_dict(),
                 "horizontal_movement_pending": self.horizontal_movement_pending,
