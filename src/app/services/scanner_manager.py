@@ -336,13 +336,13 @@ class ScannerManager(LoggerMixin):
                 
                 # Update pending movements based on direction
                 if direction == Direction.LEFT:
-                    self.horizontal_movement_pending = min(0,self.horizontal_movement_pending-1)
+                    self.horizontal_movement_pending -=1
                 elif direction == Direction.RIGHT:
-                    self.horizontal_movement_pending = max(settings.grid_size,self.horizontal_movement_pending +1)
+                    self.horizontal_movement_pending += 1
                 elif direction == Direction.UP:
-                    self.vertical_movement_pending = max(settings.grid_size,self.vertical_movement_pending +1)
+                    self.vertical_movement_pending += 1
                 elif direction == Direction.DOWN:
-                    self.vertical_movement_pending =min(0,self.vertical_movement_pending-1)
+                    self.vertical_movement_pending -=1
                 
                 # Log operation to database and save state
                 await self._safe_db_operation(self._log_and_save_movement, direction, session_id)
