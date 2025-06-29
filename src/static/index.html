@@ -486,6 +486,7 @@
         // Update grid visualization
         function updateGrid(state) {
             // Clear all cell classes
+            if(!state.flag) return;
             document.querySelectorAll('.grid-cell').forEach(cell => {
                 cell.className = 'grid-cell';
             });

@@ -699,6 +699,8 @@ class ScannerManager(LoggerMixin):
         """Send current state to a specific client."""
         if client_id in self.connected_clients:
             try:
+                data=self.get_state_dict()
+                data["flag"] = True
                 message = StateUpdateMessage(data=self.get_state_dict())
                 await self.connected_clients[client_id].send_text(message.model_dump_json())
             except Exception as e:
@@ -710,10 +712,13 @@ class ScannerManager(LoggerMixin):
         """Broadcast current state to all connected clients."""
         if not self.connected_clients:
             return
+        flag = True
         if not force and self.is_processing:
-            return
+            flag = False
         # Clear cache to force refresh
         self._state_cache = None
+        data=self.get_state_dict()
+        data["flag"] = flag
         message = StateUpdateMessage(data=self.get_state_dict())
         await self._broadcast_message(message)
     
