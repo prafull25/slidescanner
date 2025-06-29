@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Morphle Scanner Control</title>
+    <style>
+        * {
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -khtml-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+            overflow-x: hidden;
+            touch-action: manipulation;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 20px;
+            height: calc(100vh - 40px);
+        }
+
+        .main-panel {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .side-panel {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .user-info {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            font-weight: bold;
+        }
+
+        .user-valid {
+            color: #4CAF50;
+        }
+
+        .user-invalid {
+            color: #f44336;
+        }
+
+        .scanner-grid {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(11, 1fr);
+            gap: 2px;
+            background: rgba(0,0,0,0.2);
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+        }
+
+        .grid-cell {
+            aspect-ratio: 1;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .grid-cell.current-ready {
+            background: #f44336;
+            box-shadow: 0 0 20px rgba(244, 67, 54, 0.6);
+            transform: scale(1.05);
+            z-index: 2;
+        }
+
+        .grid-cell.current-active {
+            background: #4CAF50;
+            box-shadow: 0 0 20px rgba(76, 175, 80, 0.6);
+            transform: scale(1.05);
+            z-index: 2;
+        }
+
+        .grid-cell.current-moving {
+            background: #4CAF50;
+            box-shadow: 0 0 20px rgba(76, 175, 80, 0.6);
+            transform: scale(1.05);
+            z-index: 2;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .arrow-controls {
+            display: grid;
+            grid-template-columns: repeat(3, 60px);
+            gap: 5px;
+            align-items: center;
+            justify-items: center;
+        }
+
+        .control-btn {
+            width: 60px;
+            height: 60px;
+            border: none;
+            border-radius: 15px;
+            background: linear-gradient(145deg, #667eea, #764ba2);
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            touch-action: manipulation;
+        }
+
+        .control-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+        }
+
+        .control-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+
+        .control-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status-display {
+            background: rgba(0,0,0,0.3);
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            flex: 1;
+        }
+
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .status-value {
+            font-weight: bold;
+        }
+
+        .status-ready { color: #4CAF50; }
+        .status-moving { color: #FFC107; }
+        .status-focusing { color: #FF5722; }
+        .status-completed { color: #2196F3; }
+
+        .connection-status {
+            padding: 10px;
+            text-align: center;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }
+
+        .connected {
+            background: rgba(76, 175, 80, 0.3);
+            border: 2px solid #4CAF50;
+        }
+
+        .disconnected {
+            background: rgba(244, 67, 54, 0.3);
+            border: 2px solid #f44336;
+        }
+
+        .reset-btn {
+            padding: 12px 24px;
+            background: linear-gradient(145deg, #f44336, #d32f2f);
+            border: none;
+            border-radius: 12px;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            touch-action: manipulation;
+            margin-top: auto;
+        }
+
+        .reset-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(244, 67, 54, 0.3);
+        }
+
+        .disabled-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            color: white;
+            font-size: 1.5em;
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                grid-template-columns: 1fr;
+                height: auto;
+            }
+            
+            .scanner-grid {
+                grid-template-columns: repeat(11, 1fr);
+            }
+            
+            .grid-cell {
+                font-size: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="main-panel">
+            <h1>🔬 Morphle Scanner</h1>
+            
+            <div class="user-info" id="userInfo">
+                Loading user information...
+            </div>
+            
+            <div class="scanner-grid" id="scannerGrid">
+                <!-- Grid cells will be generated by JavaScript -->
+            </div>
+            
+            <div class="controls">
+                <div class="arrow-controls">
+                    <div></div>
+                    <button class="control-btn" id="upBtn" onclick="sendMove('up')">↑</button>
+                    <div></div>
+                    <button class="control-btn" id="leftBtn" onclick="sendMove('left')">←</button>
+                    <div></div>
+                    <button class="control-btn" id="rightBtn" onclick="sendMove('right')">→</button>
+                    <div></div>
+                    <button class="control-btn" id="downBtn" onclick="sendMove('down')">↓</button>
+                    <div></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="side-panel">
+            <div class="connection-status" id="connectionStatus">
+                Initializing...
+            </div>
+            
+            <div class="status-display">
+                <h3>Scanner Status</h3>
+                <div class="status-item">
+                    <span>Position:</span>
+                    <span class="status-value" id="currentPosition">(5, 5)</span>
+                </div>
+                <div class="status-item">
+                    <span>Status:</span>
+                    <span class="status-value" id="operationStatus">ready</span>
+                </div>
+                <div class="status-item">
+                    <span>Pending H:</span>
+                    <span class="status-value" id="pendingHorizontal">0</span>
+                </div>
+                <div class="status-item">
+                    <span>Pending V:</span>
+                    <span class="status-value" id="pendingVertical">0</span>
+                </div>
+                <div class="status-item">
+                    <span>Captured:</span>
+                    <span class="status-value" id="capturedCount">0</span>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+
+    <div class="disabled-overlay" id="disabledOverlay" style="display: none;">
+        <div>
+            <h2>❌ Invalid User ID</h2>
+            <p>User ID must be 4-6 characters long and contain only letters and numbers.</p>
+            <p>Please check your URL and try again.</p>
+        </div>
+    </div>
+
+    <script>
+        let websocket = null;
+        let isConnected = false;
+        let currentState = null;
+        let userId = null;
+        let isValidUser = false;
+
+        // Extract user_id from URL parameters
+        function getUserIdFromURL() {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('user_id');
+        }
+
+        // Validate user_id format (4-6 characters, alphanumeric)
+        function validateUserId(userId) {
+            if (!userId || typeof userId !== 'string') {
+                return false;
+            }
+            if (userId.length < 4 || userId.length > 6) {
+                return false;
+            }
+            return /^[a-zA-Z0-9]+$/.test(userId);
+        }
+
+        // Update user info display
+        function updateUserInfo() {
+            const userInfoElement = document.getElementById('userInfo');
+            if (isValidUser) {
+                userInfoElement.textContent = `👤 User: ${userId}`;
+                userInfoElement.className = 'user-info user-valid';
+            } else {
+                userInfoElement.textContent = `❌ Invalid User ID: ${userId || 'Not provided'}`;
+                userInfoElement.className = 'user-info user-invalid';
+            }
+        }
+
+        // Show/hide disabled overlay
+        function toggleDisabledOverlay(show) {
+            const overlay = document.getElementById('disabledOverlay');
+            overlay.style.display = show ? 'flex' : 'none';
+            
+            // Disable all controls when showing overlay
+            const controls = document.querySelectorAll('.control-btn, .reset-btn');
+            controls.forEach(btn => {
+                btn.disabled = show;
+            });
+        }
+
+        // Initialize grid
+        function initializeGrid() {
+            const grid = document.getElementById('scannerGrid');
+            for (let y = 10; y >= 0; y--) {
+                for (let x = 0; x <= 10; x++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'grid-cell';
+                    cell.id = `cell-${x}-${y}`;
+                    cell.textContent = `${x},${y}`;
+                    grid.appendChild(cell);
+                }
+            }
+        }
+
+        // Connect to WebSocket
+        function connectWebSocket() {
+            if (!isValidUser) {
+                return;
+            }
+
+            const wsUrl = `wss://slidescanner.onrender.com/ws/${userId}`;
+            
+            websocket = new WebSocket(wsUrl);
+
+            websocket.onopen = function(event) {
+                isConnected = true;
+                updateConnectionStatus();
+                
+                // Request initial state
+                websocket.send(JSON.stringify({
+                    type: 'get_state'
+                }));
+            };
+
+            websocket.onmessage = function(event) {
+                const message = JSON.parse(event.data);
+                handleMessage(message);
+            };
+
+            websocket.onclose = function(event) {
+                isConnected = false;
+                updateConnectionStatus();
+                
+                // Only attempt to reconnect if user is valid and it wasn't a deliberate close
+                if (isValidUser && event.code !== 1000) {
+                    setTimeout(connectWebSocket, 3000);
+                }
+            };
+
+            websocket.onerror = function(error) {
+                console.log('Connection error occurred');
+            };
+        }
+
+        // Handle incoming messages
+        function handleMessage(message) {
+            switch (message.type) {
+                case 'state_update':
+                    if (message.data) {
+                        updateState(message.data);
+                    }
+                    break;
+                case 'error':
+                    if (message.data && message.data.message) {
+                        console.log('ERROR: ' + message.data.message);
+                    }
+                    break;
+                case 'pong':
+                    // Handle pong silently
+                    break;
+                default:
+                    // Handle other message types silently
+                    break;
+            }
+        }
+
+        // Update scanner state
+        function updateState(state) {
+            currentState = state;
+            
+            // Update position display
+            document.getElementById('currentPosition').textContent = 
+                `(${state.current_position.x}, ${state.current_position.y})`;
+            
+            // Update status with color
+            const statusElement = document.getElementById('operationStatus');
+            statusElement.textContent = state.operation_status;
+            statusElement.className = `status-value status-${state.operation_status}`;
+            
+            // Update pending movements
+            document.getElementById('pendingHorizontal').textContent = state.horizontal_movement_pending;
+            document.getElementById('pendingVertical').textContent = state.vertical_movement_pending;
+            
+            // Update captured count
+            document.getElementById('capturedCount').textContent = state.captured_positions.length;
+            
+            // Update grid visualization
+            updateGrid(state);
+            
+            // Update control buttons
+            updateControls(state);
+        }
+
+        // Update grid visualization
+        function updateGrid(state) {
+            // Clear all cell classes
+            document.querySelectorAll('.grid-cell').forEach(cell => {
+                cell.className = 'grid-cell';
+            });
+            
+            // Mark current position with appropriate color based on status
+            const currentCell = document.getElementById(
+                `cell-${state.current_position.x}-${state.current_position.y}`
+            );
+            
+            if (currentCell) {
+                // Red for completed or ready status, green for others
+                if (state.operation_status === 'completed' || state.operation_status === 'ready') {
+                    currentCell.classList.add('current-ready');
+                } else if (state.operation_status === 'moving') {
+                    currentCell.classList.add('current-moving');
+                } else {
+                    currentCell.classList.add('current-active');
+                }
+            }
+        }
+
+        // Update control buttons
+        function updateControls(state) {
+            // Always allow queueing movements if user is valid
+            document.querySelectorAll('.control-btn').forEach(btn => {
+                btn.disabled = !isValidUser;
+            });
+            
+            document.getElementById('resetBtn').disabled = !isValidUser;
+        }
+
+        // Update connection status
+        function updateConnectionStatus() {
+            const statusElement = document.getElementById('connectionStatus');
+            if (!isValidUser) {
+                statusElement.textContent = '❌ Invalid User ID';
+                statusElement.className = 'connection-status disconnected';
+            } else if (isConnected) {
+                statusElement.textContent = '🟢 Connected';
+                statusElement.className = 'connection-status connected';
+            } else {
+                statusElement.textContent = '🔴 Disconnected';
+                statusElement.className = 'connection-status disconnected';
+            }
+        }
+
+        // Send movement command
+        function sendMove(direction) {
+            if (!isValidUser) {
+                return;
+            }
+            
+            if (!isConnected || !websocket) {
+                console.log('Not connected to scanner');
+                return;
+            }
+
+            websocket.send(JSON.stringify({
+                type: 'move',
+                direction: direction
+            }));
+        }
+
+        // Reset scanner
+        async function resetScanner() {
+            if (!isValidUser) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`https://slidescanner.onrender.com/api/v1/reset/${userId}`, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                console.log('Scanner reset: ' + result.message);
+            } catch (error) {
+                console.log('Reset failed: ' + error.message);
+            }
+        }
+
+        // Prevent zoom on double-tap
+        let lastTouchEnd = 0;
+        document.addEventListener('touchend', function (event) {
+            const now = (new Date()).getTime();
+            if (now - lastTouchEnd <= 300) {
+                event.preventDefault();
+            }
+            lastTouchEnd = now;
+        }, false);
+
+        // Keyboard controls
+        document.addEventListener('keydown', function(event) {
+            if (!isValidUser) return;
+            
+            switch(event.key) {
+                case 'ArrowUp':
+                    event.preventDefault();
+                    sendMove('up');
+                    break;
+                case 'ArrowDown':
+                    event.preventDefault();
+                    sendMove('down');
+                    break;
+                case 'ArrowLeft':
+                    event.preventDefault();
+                    sendMove('left');
+                    break;
+                case 'ArrowRight':
+                    event.preventDefault();
+                    sendMove('right');
+                    break;
+                case 'r':
+                case 'R':
+                    event.preventDefault();
+                    resetScanner();
+                    break;
+            }
+        });
+
+        // Initialize everything
+        window.onload = function() {
+            // Get and validate user ID
+            userId = getUserIdFromURL();
+            isValidUser = validateUserId(userId);
+            
+            // Update UI based on user ID validity
+            updateUserInfo();
+            updateConnectionStatus();
+            
+            if (!isValidUser) {
+                toggleDisabledOverlay(true);
+                return;
+            }
+
+            // Initialize grid and connect
+            initializeGrid();
+            connectWebSocket();
+            
+            // Send periodic ping to keep connection alive
+            setInterval(() => {
+                if (isConnected && websocket && isValidUser) {
+                    websocket.send(JSON.stringify({ type: 'ping' }));
+                }
+            }, 30000);
+        };
+    </script>
+</body>
+</html>

@@ -13,6 +13,8 @@ from app.common.logging import setup_logging, get_logger
 from app.common.database import create_tables, close_db
 from app.routes.scanner import router as scanner_router
 from app.routes.websocket import ws_router
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 
 @asynccontextmanager
@@ -81,6 +83,12 @@ def create_app() -> FastAPI:
 # Create the app instance
 app = create_app()
 
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Serve your HTML on root path or a specific route
+@app.get("/")
+def serve_index():
+    return FileResponse("static/index.html")
 
 def main():
     """
