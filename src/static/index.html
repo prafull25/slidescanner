@@ -30,7 +30,7 @@
             max-width: 1200px;
             margin: 0 auto;
             display: grid;
-            grid-template-columns: 1fr 300px;
+            grid-template-columns: 1fr 400px;
             gap: 20px;
             height: calc(100vh - 40px);
         }
@@ -101,25 +101,20 @@
             position: relative;
         }
 
-        .grid-cell.current-ready {
-            background: #f44336;
-            box-shadow: 0 0 20px rgba(244, 67, 54, 0.6);
-            transform: scale(1.05);
-            z-index: 2;
-        }
-
-        .grid-cell.current-active {
+        .grid-cell.current {
             background: #4CAF50;
             box-shadow: 0 0 20px rgba(76, 175, 80, 0.6);
             transform: scale(1.05);
             z-index: 2;
         }
 
-        .grid-cell.current-moving {
-            background: #4CAF50;
-            box-shadow: 0 0 20px rgba(76, 175, 80, 0.6);
-            transform: scale(1.05);
-            z-index: 2;
+        .grid-cell.captured {
+            background: #FF5722;
+            box-shadow: 0 0 15px rgba(255, 87, 34, 0.5);
+        }
+
+        .grid-cell.moving {
+            background: #FFC107;
             animation: pulse 1s infinite;
         }
 
@@ -180,7 +175,6 @@
             padding: 20px;
             border-radius: 15px;
             margin-bottom: 20px;
-            flex: 1;
         }
 
         .status-item {
@@ -228,7 +222,6 @@
             cursor: pointer;
             transition: all 0.2s ease;
             touch-action: manipulation;
-            margin-top: auto;
         }
 
         .reset-btn:hover {
@@ -327,6 +320,7 @@
                 </div>
             </div>
             
+            <button class="reset-btn" onclick="resetScanner()" id="resetBtn">🔄 Reset Scanner</button>
         </div>
     </div>
 
@@ -406,7 +400,7 @@
                 return;
             }
 
-            const wsUrl = `wss://slidescanner.onrender.com/ws/${userId}`;
+            const wsUrl = `ws://127.0.0.1:8000/ws/${userId}`;
             
             websocket = new WebSocket(wsUrl);
 
@@ -496,19 +490,21 @@
                 cell.className = 'grid-cell';
             });
             
-            // Mark current position with appropriate color based on status
+            // Mark captured positions
+            state.captured_positions.forEach(pos => {
+                const cell = document.getElementById(`cell-${pos[0]}-${pos[1]}`);
+                if (cell) cell.classList.add('captured');
+            });
+            
+            // Mark current position
             const currentCell = document.getElementById(
                 `cell-${state.current_position.x}-${state.current_position.y}`
             );
             
             if (currentCell) {
-                // Red for completed or ready status, green for others
-                if (state.operation_status === 'completed' || state.operation_status === 'ready') {
-                    currentCell.classList.add('current-ready');
-                } else if (state.operation_status === 'moving') {
-                    currentCell.classList.add('current-moving');
-                } else {
-                    currentCell.classList.add('current-active');
+                currentCell.classList.add('current');
+                if (state.operation_status === 'moving') {
+                    currentCell.classList.add('moving');
                 }
             }
         }
@@ -553,6 +549,8 @@
                 type: 'move',
                 direction: direction
             }));
+            
+            console.log(`Movement queued: ${direction}`);
         }
 
         // Reset scanner
@@ -562,7 +560,7 @@
             }
             
             try {
-                const response = await fetch(`https://slidescanner.onrender.com/api/v1/reset/${userId}`, {
+                const response = await fetch(`http://127.0.0.1:8000/api/v1/users/${userId}/reset`, {
                     method: 'POST'
                 });
                 const result = await response.json();

@@ -499,7 +499,8 @@ class ScannerManager(LoggerMixin):
                 await self._safe_db_operation(self._log_movement_complete, session_id, elapsed)
                 
                 await self.broadcast_log(f"Movement completed to {self.current_position}")
-                await self.broadcast_state()
+                if not flag_break:
+                    await self.broadcast_state()
                 
                 # Small delay to check for new movements
                 await asyncio.sleep(0.1)
