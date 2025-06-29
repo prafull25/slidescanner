@@ -40,7 +40,7 @@ async def get_scanner_manager(user_id: str, db: AsyncSession = Depends(get_db)) 
     if not _validate_user_id(user_id):
         raise HTTPException(status_code=400, detail="Invalid user_id format")
     
-    manager_key = f"{user_id}_{str(id(db))}"
+    manager_key = f"{user_id}"
     
     if manager_key not in _scanner_managers:
         manager = ScannerManager(db, user_id)
@@ -120,7 +120,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
 async def _get_scanner_manager_internal(db: AsyncSession, user_id: str) -> ScannerManager:
     """Internal helper to get scanner manager without FastAPI dependency injection."""
-    manager_key = f"{user_id}_{str(id(db))}"
+    manager_key = f"{user_id}"
     
     if manager_key not in _scanner_managers:
         manager = ScannerManager(db, user_id)
